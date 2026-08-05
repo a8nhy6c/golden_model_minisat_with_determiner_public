@@ -29,7 +29,14 @@ def parse_header(lines):
     while ("CONF_det_" + str(determiner_count)) in column_index:
         determiner_count += 1
 
-    return column_index, vid_bit_count, row_count, determiner_count
+    address_bit_count = 0
+    while ("A_in_" + str(address_bit_count)) in column_index:
+        address_bit_count += 1
+
+    has_combining_tree = "CID_out_0" in column_index
+
+    return (column_index, vid_bit_count, row_count, determiner_count, address_bit_count,
+            has_combining_tree)
 
 
 def is_data_line(line):
@@ -99,7 +106,40 @@ def determiner_snapshot_of_line(tokens, column_index, determiner_count):
     return verdicts
 
 
-def emit_markdown(operations, column_index, vid_bit_count, row_count, determiner_count):
+def combining_tree_snapshot_of_line(tokens, column_index):
+    # Read from the operation's last data line, the tree settle row, which is the one line whose
+    # tree columns carry this operation's verdict rather than '-' or the previous verdict.
+    conflict = column_value(tokens, column_index, "CONF")
+    unit = column_value(tokens, column_index, "UP")
+    done = column_value(tokens, column_index, "DONE")
+    literal_position = (column_value(tokens, column_index, "LID_out_1")
+                        + column_value(tokens, column_index, "LID_out_0"))
+    clause_position = (column_value(tokens, column_index, "CID_out_1")
+                       + column_value(tokens, column_index, "CID_out_0"))
+    return conflict, unit, done, literal_position, clause_position
+
+
+def addressed_row_of_operation(data_lines, column_index, row_count, address_bit_count):
+    # A vec built for the bare array or the determiner wrapper carries 16 one hot ADDR_IN columns;
+    # a full chip vec carries the decoder's 4 bit A_in instead, so the row has to be decoded here
+    # the same way the Decoder_4to16 cell decodes it.
+    if address_bit_count:
+        for tokens in data_lines:
+            bits = ""
+            for bit in range(address_bit_count - 1, -1, -1):
+                bits += column_value(tokens, column_index, "A_in_" + str(bit))
+            if all(character in "01" for character in bits):
+                return int(bits, 2)
+        return None
+    for row in range(row_count):
+        for tokens in data_lines:
+            if column_value(tokens, column_index, "ADDR_IN_" + str(row)) == "1":
+                return row
+    return None
+
+
+def emit_markdown(operations, column_index, vid_bit_count, row_count, determiner_count,
+                  address_bit_count=0, has_combining_tree=False):
     row_vid = ["-" * vid_bit_count for _ in range(row_count)]
     output = []
     output.append("# CAM+SRAM submodule vec expected-output report")
@@ -115,6 +155,12 @@ def emit_markdown(operations, column_index, vid_bit_count, row_count, determiner
                       "read from that operation's settle row. `Lit_Pos` is only meaningful when "
                       "`UP` is 1.")
         output.append("")
+    if has_combining_tree:
+        output.append("A third table gives the chip level Combining Tree verdict, read from the "
+                      "tree settle row. `CID_out` names the winning clause and `LID_out` the "
+                      "literal within it, so together they name a row; both are only meaningful "
+                      "when `UP` is 1.")
+        output.append("")
     output.append("Config: n=%d rows, k=%d VID bits, %d determiners."
                   % (row_count, vid_bit_count, determiner_count))
     output.append("")
@@ -125,14 +171,8 @@ def emit_markdown(operations, column_index, vid_bit_count, row_count, determiner
         operation_number += 1
 
         if operation["kind"] == "write" and operation["data_lines"]:
-            addressed_row = None
-            for row in range(row_count):
-                for tokens in operation["data_lines"]:
-                    if column_value(tokens, column_index, "ADDR_IN_" + str(row)) == "1":
-                        addressed_row = row
-                        break
-                if addressed_row is not None:
-                    break
+            addressed_row = addressed_row_of_operation(
+                operation["data_lines"], column_index, row_count, address_bit_count)
             write_enable_cam = any(
                 column_value(tokens, column_index, "WE_CAM") == "1"
                 for tokens in operation["data_lines"])
@@ -185,6 +225,21 @@ def emit_markdown(operations, column_index, vid_bit_count, row_count, determiner
                                  conflict, unit, done, position))
             output.append("")
 
+        if has_combining_tree and operation["data_lines"]:
+            conflict, unit, done, literal_position, clause_position = \
+                combining_tree_snapshot_of_line(operation["data_lines"][-1], column_index)
+            named_row = "-"
+            if unit == "1" and all(character in "01" for character in
+                                   clause_position + literal_position):
+                literals_per_determiner = row_count // determiner_count
+                named_row = str(int(clause_position, 2) * literals_per_determiner
+                                + int(literal_position, 2))
+            output.append("| Combining tree | CONF | UP | DONE | CID_out | LID_out | Row named |")
+            output.append("|---|---|---|---|---|---|---|")
+            output.append("| chip | %s | %s | %s | %s | %s | %s |"
+                          % (conflict, unit, done, clause_position, literal_position, named_row))
+            output.append("")
+
     return "\n".join(output) + "\n"
 
 
@@ -196,10 +251,11 @@ def main(argument_values):
     with open(vec_path) as vec_file:
         lines = vec_file.readlines()
 
-    column_index, vid_bit_count, row_count, determiner_count = parse_header(lines)
+    (column_index, vid_bit_count, row_count, determiner_count, address_bit_count,
+     has_combining_tree) = parse_header(lines)
     operations = split_into_operations(lines)
     markdown = emit_markdown(operations, column_index, vid_bit_count, row_count,
-                             determiner_count)
+                             determiner_count, address_bit_count, has_combining_tree)
 
     if len(argument_values) > 2:
         with open(argument_values[2], "w") as output_file:

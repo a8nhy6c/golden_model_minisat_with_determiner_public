@@ -18,6 +18,8 @@ so the expected outputs can be checked by eye.
   +- checked .vec   timed stimulus + io o expected columns (VecEmitter owns ALL timing)
             |         emitCheckedVec               -> bare Submodule_4x16, memory columns
             |         emitCheckedVecWithDeterminer -> BCP_Top_4x16_4det, + determiner columns
+            |         emitCheckedVecFullChip       -> decoder + array + determiners + tree,
+            |                                        + D_out and tree columns
             |                                   |
             v                                   v
   Cadence tran sim -> pass or fail    vec_to_markdown.py -> report.md (tables per op)
@@ -25,12 +27,19 @@ so the expected outputs can be checked by eye.
 
 ## Status
 
-This copy models the CAM + SRAM submodule together with the per row Determiner that evaluates a
-clause from the stored literal values. It computes `CONF`, `UP`, `DONE` and `Lit_Pos` for every
-clause after every operation (section 7), and can emit them as extra checked columns in the `.vec`.
+This copy models the whole chip: the `Decoder_4to16`, the CAM + SRAM submodule, the per row
+Determiner that evaluates a clause from the stored literal values, and the two level Combining
+Tree that reduces the four clause verdicts to one chip level answer. It computes `CONF`, `UP`,
+`DONE` and `Lit_Pos` per clause (section 7) and chip level `CONF`, `UP`, `DONE`, `LID_out` and
+`CID_out` (section 9) after every operation, and can emit any of them as checked `.vec` columns.
 
-Not modelled: the H tree logic that would combine per clause verdicts into a chip level answer,
-and the step from `Lit_Pos` back to a variable ID. Neither exists in the hardware wrapper yet.
+Not modelled: the step from a named row back to a variable ID. `{CID_out, LID_out}` names the
+winning row, but turning that row into the VID it stores needs a read operation, since the array
+has no other path from a row to its stored key.
+
+**No full chip wrapper exists in this repo yet.** `BCP_Top_4x16_4det_with_defs.cdl` stops at the
+submodule plus four determiners, so the full chip vec has no DUT to run against until a wrapper
+adding the decoder and `CombTree_2lvl` is generated. See section 10.
 
 ## 0. Requirements
 
@@ -42,16 +51,18 @@ No other dependencies. The MiniSAT solver is bundled in `minisat/`, so there is 
 ## 1. Build and run
 
 ```bash
-make                                  # compiles the bundled minisat + both example ops programs
+make                                  # compiles the bundled minisat + the three example ops programs
 ./examples/expanded_all_ops           # writes examples/out_results.txt + examples/out_checked.vec
 ./examples/determiner_ops             # writes examples/out_determiner_results.txt
                                       #    + examples/out_determiner.vec
+./examples/fullchip_ops               # writes examples/out_fullchip_results.txt
+                                      #    + examples/out_fullchip.vec
 make examples/template_ops            # build the skeleton you edit (section 2)
 make examples/expanded_all_ops        # (re)build one ops program
 make clean                            # remove build artifacts and generated outputs
 ```
 
-`make` builds only the two worked examples. `examples/template_ops.cpp` is built on demand, so a
+`make` builds only the three worked examples. `examples/template_ops.cpp` is built on demand, so a
 half finished edit in it never blocks the rest of the project from compiling.
 
 The build uses `-std=gnu++98` because minisat is C++98 era code; clang in c++11 mode rejects its
@@ -60,21 +71,38 @@ The build uses `-std=gnu++98` because minisat is C++98 era code; clang in c++11 
 
 ## 2. Writing an ops program to generate a new .vec
 
-**Start with `examples/template_ops.cpp`.** It is a skeleton with an empty body and every
-operation documented, with examples, in one comment block at the bottom of the file. Three steps:
+**Start with `examples/template_ops.cpp`.** It carries the smallest run that produces a chip level
+`UP` verdict, 18 operations, with every operation documented in one comment block at the bottom of
+the file. Three steps:
 
-**Step 1. Type your operations** where the marker line is:
+**Step 1. Replace the operations** with your own, or keep them as a starting point:
 
 ```cpp
     goldenmodel::GoldenModelRun run(16, 4);
 
-    // type your operations here
-    run.write(0, 6, '1', 1);
-    run.search(6, '0');
-    run.read(0);
+    run.write(0, 1, 'x', 0);
+    run.write(1, 1, 'x', 0);      // rows 0 and 1 share vid 1
+    ...                           // 16 writes: every row must be written
+    run.search(1, '0');           // one search falsifies both shared rows
+    run.search(2, '0');
 
     if (run.emitResults(results_path) != 0) return 1;
 ```
+
+Why 18 is the floor:
+
+- all 16 rows have to be written before any tree column stops being `-` (section 9);
+- values have to arrive through `search` rather than through addressed writes, or the minisat
+  cross checks are skipped and the emitted values are ungrounded;
+- the other three clauses need no operations at all. A clause whose four literals are all
+  unassigned reports `CONF=UP=DONE=0`, so it can neither conflict nor compete as a unit clause;
+  the `x` load leaves them inert for free;
+- that leaves three literals of the scenario clause to falsify, which is three searches, or two
+  once rows 0 and 1 share a vid.
+
+Being minimal costs coverage: no clause is ever satisfied, so chip level `DONE` never reaches 1,
+there is no conflict, and only one clause is ever unit. `examples/fullchip_ops.cpp` covers those
+in 33 operations.
 
 **Step 2. Build and run**, from the top of this project, not from inside `examples/`:
 
@@ -116,11 +144,19 @@ is a compile error rather than a runtime surprise.
 
 ### Choosing which .vec to emit
 
-The template calls `emitCheckedVecWithDeterminer`, which adds five checked columns per Determiner
-and targets the wrapper containing them. For the memory only stimulus aimed at the bare
-`Submodule_4x16`, swap that one line for `emitCheckedVec`. The determiner verdict is computed
-either way and always appears in the results log; the choice only changes which columns land in
-the `.vec`.
+The template calls `emitCheckedVecFullChip`, since its scenario exists to exercise the tree
+columns. Swap that one line for the DUT you intend to simulate:
+
+| Emitter | Target | Columns |
+|---|---|---|
+| `emitCheckedVec` | bare `Submodule_4x16` | 16 one hot `ADDR_IN` in; `Q_Val` / `Q_Pol` / read path out |
+| `emitCheckedVecWithDeterminer` | `BCP_Top_4x16_4det` | the above plus 5 columns per determiner |
+| `emitCheckedVecFullChip` | decoder + array + 4 determiners + tree | `A_in[3:0]` in place of `ADDR_IN`; the above plus `D_out[15:0]` and 7 tree columns |
+
+The determiner and tree verdicts are computed whichever you pick and always appear in the results
+log; the choice only changes which columns land in the `.vec`. The full chip flavour needs exactly
+16 rows and 4 determiners, since `CombTree_2lvl` is a fixed two level tree and the decoder is a
+fixed 4 bit decoder, and it uses a 12 ns slot per operation instead of 10 ns (section 8).
 
 ### Worked examples to copy from
 
@@ -128,6 +164,11 @@ the `.vec`.
 - `examples/determiner_ops.cpp` drives eight clause scenarios and documents the expected
   `CONF` / `UP` / `DONE` / `Lit_Pos` for each, taken from the Determiner's own reference vectors.
   Useful as a correctness reference when you are unsure what a verdict should be.
+- `examples/fullchip_ops.cpp` writes all 16 rows and then drives every chip level case through
+  searches: all clauses satisfied, one clause unit, two clauses unit at once, and a conflict that
+  must outrank a unit. It writes all 16 rows on purpose, unlike `determiner_ops.cpp`: with rows 4
+  to 15 never written, determiners 1 to 3 report `-` and every tree column would be `-` for the
+  whole run.
 
 Build any of them the same way, with `make examples/<name>`.
 
@@ -184,6 +225,11 @@ conf_det 0---
 up_det 1---
 done_det 0---
 lid_det 01------
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
 ```
 
 - `q_val` has 2n characters; character `2r` is the MSB storage node `Q_Val[2r]` of row r and `2r+1`
@@ -193,6 +239,11 @@ lid_det 01------
 - `conf_det` / `up_det` / `done_det` have one character per determiner and `lid_det` has two, MSB
   first. `-` means that clause contains at least one never written row, so no verdict is defined.
   These four lines appear whichever vec flavour you emit, since the verdict is computed either way.
+- `tree_conf` / `tree_up` / `tree_done` are one character each and `tree_lid` / `tree_cid` two,
+  MSB first: the chip level verdict out of the Combining Tree. All five are `-` when any of the
+  four determiners is `-`, since the tree cannot have a defined output when one of its inputs does
+  not. `tree_cid` names the winning clause and `tree_lid` the literal within it, so together they
+  name a row; both are only meaningful when `tree_up` is 1.
 - `matched rows=` appears after every search (informational; `CAM_ML` is not a port, so match
   correctness is verified indirectly through the Val write it causes).
 - `read vid= val= pol=` appears only after read operations and maps onto `VID_OUT_{k-1}..0` (MSB
@@ -231,6 +282,13 @@ Rows, CONF, UP, DONE, Lit_Pos**. Those values come from the operation's own **la
 settle row (section 7), not from the next operation's block. On a vec without determiner columns
 the script behaves exactly as before.
 
+If the vec carries tree columns, a third table is appended with **CONF, UP, DONE, CID_out,
+LID_out, Row named**, read from the operation's last data line, which on a full chip vec is the
+tree settle row. The last cell is the arithmetic the tree exists to enable:
+`CID_out * 4 + LID_out` is the row the chip is pointing at, filled in only when `UP` is 1. On a
+full chip vec the per row VID column is recovered from the `A_in_*` inputs instead of `ADDR_IN_*`,
+decoded the same way the `Decoder_4to16` cell decodes them.
+
 ## 5. Bundled MiniSAT
 
 `minisat/` is a redistributed copy of upstream MiniSAT 2.2
@@ -252,9 +310,10 @@ golden_model_minisat_with_determiner_public/
 |-- vec_to_markdown.py                .vec -> markdown report (the only input is the .vec)
 |-- Makefile                          all / clean; pattern rule builds examples/<name>.cpp
 |-- LICENSE                           MIT (project) + note on bundled MiniSAT
-|-- examples/template_ops.cpp         START HERE: empty skeleton, all three ops documented
+|-- examples/template_ops.cpp         START HERE: minimal 18 op scenario, all three ops documented
 |-- examples/expanded_all_ops.cpp     minimal worked example: write, search, read
 |-- examples/determiner_ops.cpp       determiner scenarios with known good expected verdicts
+|-- examples/fullchip_ops.cpp         chip level scenarios: satisfied, unit, two unit, conflict
 `-- minisat/                          bundled, lightly patched MiniSAT 2.2 (its own LICENSE)
 ```
 
@@ -303,11 +362,15 @@ then produces. It exists so the model can predict either wiring from a one line 
 and the offsets within it are transcribed from the hand written reference stimulus rather than
 computed:
 
-| Operation | Control rows | Commit | Settle row |
-|---|---|---|---|
-| write | +0 precharge, +5 write driver, +6 wordline on, +7 off | +6 | +8 |
-| search | +0 SL precharge low, +2 ML precharge high, +5 drivers, +7 wordline enable | +7 | +9 |
-| read | +0 bitline precharge, +5 ReadEN, +6 wordline, +10 SenseEN strobe | none | none |
+| Operation | Control rows | Commit | Determiner settle | Tree settle |
+|---|---|---|---|---|
+| write | +0 precharge, +5 write driver, +6 wordline on, +7 off | +6 | +8 | +10 |
+| search | +0 SL precharge low, +2 ML precharge high, +5 drivers, +7 wordline enable | +7 | +9 | +11 |
+| read | +0 bitline precharge, +5 ReadEN, +6 wordline, +10 SenseEN strobe | none | none | none |
+
+The slot is 10 ns for the memory only and determiner flavours, which have no tree settle row, and
+12 ns for the full chip flavour. A search commits at +7, so its tree row lands at +11 and cannot
+fit a 10 ns slot.
 
 Any operation following a read starts at +2 instead of +0 so it clears the previous read's 2 ns
 SenseEN pulse.
@@ -333,5 +396,57 @@ slot, so nothing outside these columns moves, and `emitCheckedVec` never takes t
 is why the memory only vec is byte for byte what it was before.
 
 The header's rail relative thresholds `voh 0.77` / `vol 0.33` / `vth 0.55` (0.7, 0.3, 0.5 of
-VDD = 1.1) now also apply to the determiner columns. They were chosen for SRAM storage nodes;
-confirm they suit standard cell outputs before trusting a pass.
+VDD = 1.1) now also apply to the determiner, decoder and tree columns. They were chosen for SRAM
+storage nodes; confirm they suit standard cell outputs before trusting a pass.
+
+**Where the 2 ns increments come from.** They are inherited from the determiner offset, not
+measured. `Determiner/reports` gives Design Compiler arrival times of 0.087 ns for `DET_StageOne`,
+0.106 ns for `DET_StageTwo` and 0.132 ns for `DET_StageThree`, so `DET_Hier` is roughly 0.33 ns end
+to end, and `CombTree_2lvl` has no timing report at all but is structurally comparable. Those
+numbers are 65nm typical corner with zero wire load, so both settle offsets are deliberately
+generous. If a clean run shows the margin is real, the two settle rows can be collapsed into one at
+commit + 2 and the slot returned to 10 ns.
+
+## 9. The Combining Tree model
+
+`CombTree_2lvl` reduces the four determiner verdicts to one chip level answer plus `LID_out[1:0]`
+and `CID_out[1:0]`. `evaluateCombiningTreeNode` in `golden_model_core.cpp` transcribes the
+reconstructed node in `Combining_Tree_2lvl/verilog_code/combining_tree_verilog.v` gate for gate,
+internal nets included, and `evaluateCombiningTree` wires three of them the way the module does:
+determiners 0 and 1, determiners 2 and 3, then those two results.
+
+For legal determiner states the node equations reduce to something readable:
+
+| Output | Reduces to | Meaning |
+|---|---|---|
+| `CONF` | `CONF_L or CONF_R` | a conflict in any clause is a chip level conflict |
+| `DONE` | `DONE_L and DONE_R` | every clause has a true literal |
+| `UP` | `(UP_L or UP_R) and not CONF` | the paper's BACKTRACK over UP priority, in one gate |
+
+Note that chip level `CONF` ORs across clauses while the Determiner's internal `CONF` ANDs across
+literal pairs. Both are correct: a clause conflicts only when all its literals are false, but the
+chip conflicts as soon as any one clause does.
+
+`{CID_out, LID_out}` is a 4 bit row index, which is how the tree closes most of the gap between a
+verdict and an actionable answer. Turning that row into the VID it stores still needs a read.
+
+**Minisat grounding.** `verifyCombiningTreeAgainstSolver` derives the three verdict bits
+independently from `Solver::value` over the rebuilt literals and warns on any disagreement, under
+the same contract as the determiner check: warnings only, never a change to an emitted value. When
+`UP` is set it also checks that the row named by `{CID_out, LID_out}` really is the one unassigned
+literal of an otherwise false clause. That check pins `CID_out` and `LID_out` uniquely when exactly
+one clause is unit. When two or more clauses are unit it can only confirm the tree named a legal
+one: which of several simultaneously unit clauses wins is the tree's own arbitration and has no
+minisat referent.
+
+## 10. The Decoder model, and what is still missing in hardware
+
+`Decoder_4to16` (cell `Decoder`, `A_in[3:0]` to `D_out[15:0]`) replaces the 16 one hot `ADDR_IN`
+pins with a 4 bit binary address. The model is one function, `decoderOutputText`: one hot at the
+addressed row.
+
+Searches drive `A_in = 0000`. A decoder with no enable always asserts exactly one line, so there is
+no longer a "no row selected" state, but a search holds `WE_CAM = 0` and `SRAM_WL_mode = 0`, and
+`SRAM_WL_mode = 0` selects the matchline path over the address path, so the hot line cannot reach a
+wordline. `D_out` columns are `-` on the first data row of each operation, where `A_in` changes,
+and asserted on every later row.

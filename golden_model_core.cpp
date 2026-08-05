@@ -79,6 +79,10 @@ static const int DETERMINER_LITERAL_COUNT = 4;
 static const bool DETERMINER_READS_EVEN_NODE_AS_VAL1 = true;
 static const int DETERMINER_SETTLE_OFFSET = 2;
 
+static const int COMBINING_TREE_INPUT_COUNT = 4;
+static const int COMBINING_TREE_SETTLE_OFFSET = 4;
+static const int DECODER_ADDRESS_BIT_COUNT = 4;
+
 inline lbool valbits_to_lbool(int value_bits) {
     if (value_bits == VALBITS_FALSE) return Minisat::l_False;
     if (value_bits == VALBITS_TRUE) return Minisat::l_True;
@@ -146,6 +150,12 @@ struct OperationResult {
     std::string up_det_text;
     std::string done_det_text;
     std::string lid_det_text;
+    std::string d_out_text;
+    std::string tree_conf_text;
+    std::string tree_up_text;
+    std::string tree_done_text;
+    std::string tree_lid_text;
+    std::string tree_cid_text;
     bool has_read;
     std::string read_vid_text;
     std::string read_val_text;
@@ -183,6 +193,112 @@ struct DeterminerVerdict {
                           position(0) {}
 };
 
+struct CombiningTreeBranch {
+    int conflict_bit;
+    int unit_bit;
+    int done_bit;
+    int position;
+
+    CombiningTreeBranch() : conflict_bit(0), unit_bit(0), done_bit(0), position(0) {}
+};
+
+struct CombiningTreeNodeVerdict {
+    int conflict_bit;
+    int unit_bit;
+    int done_bit;
+    int position;
+    int select_bit;
+
+    CombiningTreeNodeVerdict() : conflict_bit(0), unit_bit(0), done_bit(0), position(0),
+                                 select_bit(0) {}
+};
+
+struct CombiningTreeVerdict {
+    bool comparable;
+    int conflict_bit;
+    int unit_bit;
+    int done_bit;
+    int literal_position;
+    int clause_position;
+
+    CombiningTreeVerdict() : comparable(false), conflict_bit(0), unit_bit(0), done_bit(0),
+                             literal_position(0), clause_position(0) {}
+};
+
+inline CombiningTreeNodeVerdict evaluateCombiningTreeNode(const CombiningTreeBranch& left,
+                                                          const CombiningTreeBranch& right) {
+    int position_left_high = (left.position >> 1) & 1;
+    int position_left_low = left.position & 1;
+    int position_right_high = (right.position >> 1) & 1;
+    int position_right_low = right.position & 1;
+
+    int net1 = !right.unit_bit;
+    int net2 = !left.unit_bit;
+    int net4 = !right.conflict_bit;
+    int net6 = !left.conflict_bit;
+    int net7 = !right.done_bit;
+
+    CombiningTreeNodeVerdict verdict;
+    verdict.conflict_bit = !(net4 && net6);
+    verdict.unit_bit = !((net1 && net2) || verdict.conflict_bit);
+
+    int net5 = !(net7 || left.done_bit || net4);
+    int net3 = !((right.conflict_bit || net2) && (net5 || net6));
+    verdict.select_bit = !((net4 && net1) || net3);
+
+    int position_high = (position_right_high && verdict.select_bit)
+                      || (position_left_high && net3);
+    int position_low = (position_right_low && verdict.select_bit)
+                     || (position_left_low && net3);
+    verdict.position = (position_high << 1) | position_low;
+
+    int net8 = !(right.conflict_bit || left.done_bit);
+    verdict.done_bit = !(net8 || net7) || (left.conflict_bit && left.done_bit);
+    return verdict;
+}
+
+inline CombiningTreeBranch branchOfDeterminer(const DeterminerVerdict& verdict) {
+    CombiningTreeBranch branch;
+    branch.conflict_bit = verdict.conflict_bit;
+    branch.unit_bit = verdict.unit_bit;
+    branch.done_bit = verdict.done_bit;
+    branch.position = verdict.position;
+    return branch;
+}
+
+inline CombiningTreeBranch branchOfNode(const CombiningTreeNodeVerdict& verdict) {
+    CombiningTreeBranch branch;
+    branch.conflict_bit = verdict.conflict_bit;
+    branch.unit_bit = verdict.unit_bit;
+    branch.done_bit = verdict.done_bit;
+    branch.position = verdict.position;
+    return branch;
+}
+
+inline CombiningTreeVerdict evaluateCombiningTree(const std::vector<DeterminerVerdict>& verdicts) {
+    CombiningTreeVerdict tree_verdict;
+    if ((int)verdicts.size() != COMBINING_TREE_INPUT_COUNT) return tree_verdict;
+    for (int determiner = 0; determiner < COMBINING_TREE_INPUT_COUNT; determiner++)
+        if (!verdicts[determiner].comparable) return tree_verdict;
+    tree_verdict.comparable = true;
+
+    CombiningTreeNodeVerdict node_01 = evaluateCombiningTreeNode(branchOfDeterminer(verdicts[0]),
+                                                                 branchOfDeterminer(verdicts[1]));
+    CombiningTreeNodeVerdict node_23 = evaluateCombiningTreeNode(branchOfDeterminer(verdicts[2]),
+                                                                 branchOfDeterminer(verdicts[3]));
+    CombiningTreeNodeVerdict node_top = evaluateCombiningTreeNode(branchOfNode(node_01),
+                                                                  branchOfNode(node_23));
+
+    tree_verdict.conflict_bit = node_top.conflict_bit;
+    tree_verdict.unit_bit = node_top.unit_bit;
+    tree_verdict.done_bit = node_top.done_bit;
+    tree_verdict.literal_position = node_top.position;
+    int clause_high = node_top.select_bit;
+    int clause_low = node_top.select_bit ? node_23.select_bit : node_01.select_bit;
+    tree_verdict.clause_position = (clause_high << 1) | clause_low;
+    return tree_verdict;
+}
+
 class OperationModel {
 public:
     OperationModel(int row_count, int vid_bit_count)
@@ -218,6 +334,11 @@ public:
             verdicts.push_back(evaluateDeterminer(determiner));
         fillDeterminerText(verdicts, result);
         verifyDeterminersAgainstSolver(verdicts, operation.operation_number);
+
+        CombiningTreeVerdict tree_verdict = evaluateCombiningTree(verdicts);
+        fillCombiningTreeText(tree_verdict, result);
+        result.d_out_text = decoderOutputText(operation);
+        verifyCombiningTreeAgainstSolver(tree_verdict, operation.operation_number);
         return result;
     }
 
@@ -448,6 +569,106 @@ private:
         }
     }
 
+    void fillCombiningTreeText(const CombiningTreeVerdict& tree_verdict,
+                               OperationResult& result) const {
+        if (!tree_verdict.comparable) {
+            result.tree_conf_text = "-";
+            result.tree_up_text = "-";
+            result.tree_done_text = "-";
+            result.tree_lid_text = "--";
+            result.tree_cid_text = "--";
+            return;
+        }
+        result.tree_conf_text = tree_verdict.conflict_bit ? "1" : "0";
+        result.tree_up_text = tree_verdict.unit_bit ? "1" : "0";
+        result.tree_done_text = tree_verdict.done_bit ? "1" : "0";
+        result.tree_lid_text = std::string(1, ((tree_verdict.literal_position >> 1) & 1) ? '1' : '0')
+                             + std::string(1, (tree_verdict.literal_position & 1) ? '1' : '0');
+        result.tree_cid_text = std::string(1, ((tree_verdict.clause_position >> 1) & 1) ? '1' : '0')
+                             + std::string(1, (tree_verdict.clause_position & 1) ? '1' : '0');
+    }
+
+    std::string decoderOutputText(const Operation& operation) const {
+        int addressed_row = (operation.kind == Operation::SearchOperation) ? 0 : operation.row;
+        std::string text;
+        for (int row = 0; row < row_count_; row++)
+            text += (row == addressed_row) ? '1' : '0';
+        return text;
+    }
+
+    lbool solverLiteralValue(int row) const {
+        return solver_.hardwareValue(row_vid_[row]) ^ (row_pol_[row] != 0);
+    }
+
+    bool clauseAgreesWithSolver(int determiner) const {
+        int first_row = determiner * DETERMINER_LITERAL_COUNT;
+        for (int offset = 0; offset < DETERMINER_LITERAL_COUNT; offset++) {
+            int row = first_row + offset;
+            if (!row_vid_written_[row]) return false;
+            if (!(row_val_[row] == solver_.hardwareValue(row_vid_[row]))) return false;
+        }
+        return true;
+    }
+
+    void verifyCombiningTreeAgainstSolver(const CombiningTreeVerdict& tree_verdict,
+                                          int operation_number) const {
+        if (!tree_verdict.comparable) return;
+        if (determiner_count_ != COMBINING_TREE_INPUT_COUNT) return;
+        for (int determiner = 0; determiner < determiner_count_; determiner++)
+            if (!clauseAgreesWithSolver(determiner)) return;
+
+        bool any_conflicting = false;
+        bool any_unit = false;
+        bool all_satisfied = true;
+        for (int determiner = 0; determiner < determiner_count_; determiner++) {
+            int first_row = determiner * DETERMINER_LITERAL_COUNT;
+            int true_count = 0;
+            int unassigned_count = 0;
+            for (int offset = 0; offset < DETERMINER_LITERAL_COUNT; offset++) {
+                lbool literal_value = solverLiteralValue(first_row + offset);
+                if (literal_value == Minisat::l_True) true_count++;
+                else if (literal_value == Minisat::l_Undef) unassigned_count++;
+            }
+            if (true_count > 0) continue;
+            all_satisfied = false;
+            if (unassigned_count == 0) any_conflicting = true;
+            else if (unassigned_count == 1) any_unit = true;
+        }
+
+        int expected_conflict_bit = any_conflicting ? 1 : 0;
+        int expected_done_bit = all_satisfied ? 1 : 0;
+        int expected_unit_bit = (!any_conflicting && any_unit) ? 1 : 0;
+
+        if (tree_verdict.conflict_bit != expected_conflict_bit)
+            fprintf(stderr, "warning: op %d: combining tree reports CONF=%d but minisat sees "
+                    "%d clauses with every literal false\n", operation_number,
+                    tree_verdict.conflict_bit, expected_conflict_bit);
+        if (tree_verdict.done_bit != expected_done_bit)
+            fprintf(stderr, "warning: op %d: combining tree reports DONE=%d but the minisat "
+                    "Solver::value path reports %d for all clauses satisfied\n",
+                    operation_number, tree_verdict.done_bit, expected_done_bit);
+        if (tree_verdict.unit_bit != expected_unit_bit)
+            fprintf(stderr, "warning: op %d: combining tree reports UP=%d but minisat reports "
+                    "%d for a unit clause with no conflict present\n", operation_number,
+                    tree_verdict.unit_bit, expected_unit_bit);
+
+        if (tree_verdict.unit_bit != 1) return;
+
+        int first_row = tree_verdict.clause_position * DETERMINER_LITERAL_COUNT;
+        int named_row = first_row + tree_verdict.literal_position;
+        bool siblings_all_false = true;
+        for (int offset = 0; offset < DETERMINER_LITERAL_COUNT; offset++) {
+            int other_row = first_row + offset;
+            if (other_row == named_row) continue;
+            if (!(solverLiteralValue(other_row) == Minisat::l_False)) siblings_all_false = false;
+        }
+        if (!(solverLiteralValue(named_row) == Minisat::l_Undef) || !siblings_all_false)
+            fprintf(stderr, "warning: op %d: combining tree reports UP naming CID_out=%d "
+                    "Lit_Pos=%d, that is row %d, but minisat does not see that row as the one "
+                    "unassigned literal of an otherwise false clause\n", operation_number,
+                    tree_verdict.clause_position, tree_verdict.literal_position, named_row);
+    }
+
     std::string qValText() const {
         std::string text;
         for (int row = 0; row < row_count_; row++) {
@@ -514,10 +735,17 @@ static const TimedControlRow READ_CONTROL_ROWS_AFTER_READ[4] = {
     {10, "1 1 1 0 0 0 0 0 1 0"},
 };
 static const int OPERATION_PERIOD = 10;
+static const int FULL_CHIP_OPERATION_PERIOD = 12;
 static const int WRITE_COMMIT_OFFSET = 6;
 static const int SEARCH_COMMIT_OFFSET = 7;
 static const int READ_SENSE_OFFSET = 10;
 static const int WE_CAM_CONTROL_POSITION = 5;
+
+enum VecFlavour {
+    MemoryOnlyVec,
+    DeterminerVec,
+    FullChipVec
+};
 
 struct OutputColumnTexts {
     std::string q_val_text;
@@ -526,10 +754,18 @@ struct OutputColumnTexts {
     std::string up_det_text;
     std::string done_det_text;
     std::string lid_det_text;
+    std::string d_out_text;
+    std::string tree_conf_text;
+    std::string tree_up_text;
+    std::string tree_done_text;
+    std::string tree_lid_text;
+    std::string tree_cid_text;
     bool assert_read_outputs;
     bool include_determiner;
+    bool include_full_chip;
 
-    OutputColumnTexts() : assert_read_outputs(false), include_determiner(false) {}
+    OutputColumnTexts() : assert_read_outputs(false), include_determiner(false),
+                          include_full_chip(false) {}
 };
 
 class VecEmitter {
@@ -539,19 +775,28 @@ public:
           determiner_count_(row_count / DETERMINER_LITERAL_COUNT) {}
 
     void emit(std::ostream& output, const std::vector<Operation>& operations,
-              const std::vector<OperationResult>& results, bool include_determiner) const {
-        emitHeader(output, include_determiner);
+              const std::vector<OperationResult>& results, VecFlavour flavour) const {
+        bool include_determiner = (flavour != MemoryOnlyVec);
+        bool include_full_chip = (flavour == FullChipVec);
+        int operation_period = include_full_chip ? FULL_CHIP_OPERATION_PERIOD : OPERATION_PERIOD;
+        emitHeader(output, flavour);
 
         std::string blank_q_val((size_t)(2 * row_count_), '-');
         std::string blank_q_pol((size_t)row_count_, '-');
         std::string blank_det((size_t)determiner_count_, '-');
         std::string blank_lid_det((size_t)(2 * determiner_count_), '-');
+        std::string blank_d_out((size_t)row_count_, '-');
         std::string previous_q_val = blank_q_val;
         std::string previous_q_pol = blank_q_pol;
         std::string previous_conf_det = blank_det;
         std::string previous_up_det = blank_det;
         std::string previous_done_det = blank_det;
         std::string previous_lid_det = blank_lid_det;
+        std::string previous_tree_conf = "-";
+        std::string previous_tree_up = "-";
+        std::string previous_tree_done = "-";
+        std::string previous_tree_lid = "--";
+        std::string previous_tree_cid = "--";
         bool previous_was_read = false;
         int time_cursor = 0;
 
@@ -573,7 +818,7 @@ public:
                 commit_offset = -1;
             }
 
-            std::string data_tokens = dataInputTokens(operation);
+            std::string data_tokens = dataInputTokens(operation, flavour);
             std::string last_control_tokens;
             for (int row_position = 0; row_position < 4; row_position++) {
                 int offset = control_rows[row_position].offset;
@@ -585,6 +830,27 @@ public:
 
                 OutputColumnTexts texts;
                 texts.include_determiner = include_determiner;
+                texts.include_full_chip = include_full_chip;
+                texts.d_out_text = (row_position == 0) ? blank_d_out : result.d_out_text;
+                if (operation.kind == Operation::ReadOperation) {
+                    texts.tree_conf_text = result.tree_conf_text;
+                    texts.tree_up_text = result.tree_up_text;
+                    texts.tree_done_text = result.tree_done_text;
+                    texts.tree_lid_text = result.tree_lid_text;
+                    texts.tree_cid_text = result.tree_cid_text;
+                } else if (offset < commit_offset) {
+                    texts.tree_conf_text = previous_tree_conf;
+                    texts.tree_up_text = previous_tree_up;
+                    texts.tree_done_text = previous_tree_done;
+                    texts.tree_lid_text = previous_tree_lid;
+                    texts.tree_cid_text = previous_tree_cid;
+                } else {
+                    texts.tree_conf_text = "-";
+                    texts.tree_up_text = "-";
+                    texts.tree_done_text = "-";
+                    texts.tree_lid_text = "--";
+                    texts.tree_cid_text = "--";
+                }
                 if (operation.kind == Operation::ReadOperation) {
                     texts.q_val_text = result.q_val_text;
                     texts.q_pol_text = result.q_pol_text;
@@ -624,13 +890,41 @@ public:
             if (include_determiner && operation.kind != Operation::ReadOperation) {
                 OutputColumnTexts texts;
                 texts.include_determiner = true;
+                texts.include_full_chip = include_full_chip;
                 texts.q_val_text = result.q_val_text;
                 texts.q_pol_text = result.q_pol_text;
                 texts.conf_det_text = result.conf_det_text;
                 texts.up_det_text = result.up_det_text;
                 texts.done_det_text = result.done_det_text;
                 texts.lid_det_text = result.lid_det_text;
+                texts.d_out_text = result.d_out_text;
+                texts.tree_conf_text = "-";
+                texts.tree_up_text = "-";
+                texts.tree_done_text = "-";
+                texts.tree_lid_text = "--";
+                texts.tree_cid_text = "--";
                 output << (time_cursor + commit_offset + DETERMINER_SETTLE_OFFSET) << " "
+                       << last_control_tokens << " " << data_tokens
+                       << " " << outputTokens(texts, result) << "\n";
+            }
+
+            if (include_full_chip && operation.kind != Operation::ReadOperation) {
+                OutputColumnTexts texts;
+                texts.include_determiner = true;
+                texts.include_full_chip = true;
+                texts.q_val_text = result.q_val_text;
+                texts.q_pol_text = result.q_pol_text;
+                texts.conf_det_text = result.conf_det_text;
+                texts.up_det_text = result.up_det_text;
+                texts.done_det_text = result.done_det_text;
+                texts.lid_det_text = result.lid_det_text;
+                texts.d_out_text = result.d_out_text;
+                texts.tree_conf_text = result.tree_conf_text;
+                texts.tree_up_text = result.tree_up_text;
+                texts.tree_done_text = result.tree_done_text;
+                texts.tree_lid_text = result.tree_lid_text;
+                texts.tree_cid_text = result.tree_cid_text;
+                output << (time_cursor + commit_offset + COMBINING_TREE_SETTLE_OFFSET) << " "
                        << last_control_tokens << " " << data_tokens
                        << " " << outputTokens(texts, result) << "\n";
             }
@@ -641,8 +935,13 @@ public:
             previous_up_det = result.up_det_text;
             previous_done_det = result.done_det_text;
             previous_lid_det = result.lid_det_text;
+            previous_tree_conf = result.tree_conf_text;
+            previous_tree_up = result.tree_up_text;
+            previous_tree_done = result.tree_done_text;
+            previous_tree_lid = result.tree_lid_text;
+            previous_tree_cid = result.tree_cid_text;
             previous_was_read = (operation.kind == Operation::ReadOperation);
-            time_cursor += OPERATION_PERIOD;
+            time_cursor += operation_period;
             output << "\n";
         }
     }
@@ -652,10 +951,14 @@ private:
     int vid_bit_count_;
     int determiner_count_;
 
-    void emitHeader(std::ostream& output, bool include_determiner) const {
-        int input_count = 10 + vid_bit_count_ + 3 + row_count_;
+    void emitHeader(std::ostream& output, VecFlavour flavour) const {
+        bool include_determiner = (flavour != MemoryOnlyVec);
+        bool include_full_chip = (flavour == FullChipVec);
+        int address_input_count = include_full_chip ? DECODER_ADDRESS_BIT_COUNT : row_count_;
+        int input_count = 10 + vid_bit_count_ + 3 + address_input_count;
         int output_count = vid_bit_count_ + 3 + 2 * row_count_ + row_count_;
         if (include_determiner) output_count += 5 * determiner_count_;
+        if (include_full_chip) output_count += row_count_ + 7;
 
         output << "radix";
         for (int position = 0; position < input_count + output_count; position++) output << " 1";
@@ -670,7 +973,12 @@ private:
                   " SRAM_WL_mode BLPRE_EN";
         for (int bit = vid_bit_count_ - 1; bit >= 0; bit--) output << " VID_IN_" << bit;
         output << " Val_IN_1 Val_IN_0 Pol_IN";
-        for (int row = 0; row < row_count_; row++) output << " ADDR_IN_" << row;
+        if (include_full_chip) {
+            for (int bit = DECODER_ADDRESS_BIT_COUNT - 1; bit >= 0; bit--)
+                output << " A_in_" << bit;
+        } else {
+            for (int row = 0; row < row_count_; row++) output << " ADDR_IN_" << row;
+        }
         for (int bit = vid_bit_count_ - 1; bit >= 0; bit--) output << " VID_OUT_" << bit;
         output << " Val_OUT_1 Val_OUT_0 Pol_OUT";
         for (int position = 0; position < 2 * row_count_; position++) output << " Q_Val_" << position;
@@ -683,6 +991,10 @@ private:
                 output << " LID_det_" << (2 * determiner + 1);
                 output << " LID_det_" << (2 * determiner);
             }
+        }
+        if (include_full_chip) {
+            for (int row = 0; row < row_count_; row++) output << " D_out_" << row;
+            output << " CONF UP DONE LID_out_1 LID_out_0 CID_out_1 CID_out_0";
         }
         output << "\n";
 
@@ -700,13 +1012,19 @@ private:
         output << "\n";
     }
 
-    std::string dataInputTokens(const Operation& operation) const {
+    std::string dataInputTokens(const Operation& operation, VecFlavour flavour) const {
         std::ostringstream tokens;
         for (int bit = vid_bit_count_ - 1; bit >= 0; bit--)
             tokens << ((operation.vid >> bit) & 1) << " ";
         int value_bits = (operation.kind == Operation::ReadOperation) ? 0 : operation.value_bits;
         tokens << ((value_bits >> 1) & 1) << " " << (value_bits & 1) << " ";
         tokens << (operation.pol & 1);
+        if (flavour == FullChipVec) {
+            int address = (operation.kind == Operation::SearchOperation) ? 0 : operation.row;
+            for (int bit = DECODER_ADDRESS_BIT_COUNT - 1; bit >= 0; bit--)
+                tokens << " " << ((address >> bit) & 1);
+            return tokens.str();
+        }
         for (int row = 0; row < row_count_; row++) {
             bool addressed = (operation.kind != Operation::SearchOperation) && (row == operation.row);
             tokens << " " << (addressed ? 1 : 0);
@@ -738,6 +1056,17 @@ private:
                 tokens << " " << texts.lid_det_text[(size_t)(2 * determiner)];
                 tokens << " " << texts.lid_det_text[(size_t)(2 * determiner + 1)];
             }
+        }
+        if (texts.include_full_chip) {
+            for (size_t position = 0; position < texts.d_out_text.size(); position++)
+                tokens << " " << texts.d_out_text[position];
+            tokens << " " << texts.tree_conf_text;
+            tokens << " " << texts.tree_up_text;
+            tokens << " " << texts.tree_done_text;
+            tokens << " " << texts.tree_lid_text[0];
+            tokens << " " << texts.tree_lid_text[1];
+            tokens << " " << texts.tree_cid_text[0];
+            tokens << " " << texts.tree_cid_text[1];
         }
         return tokens.str();
     }
@@ -807,6 +1136,11 @@ public:
             output << "up_det " << result.up_det_text << "\n";
             output << "done_det " << result.done_det_text << "\n";
             output << "lid_det " << result.lid_det_text << "\n";
+            output << "tree_conf " << result.tree_conf_text << "\n";
+            output << "tree_up " << result.tree_up_text << "\n";
+            output << "tree_done " << result.tree_done_text << "\n";
+            output << "tree_lid " << result.tree_lid_text << "\n";
+            output << "tree_cid " << result.tree_cid_text << "\n";
         }
         printf("golden model: %d operations, results written to %s\n",
                (int)results_.size(), path);
@@ -814,11 +1148,27 @@ public:
     }
 
     int emitCheckedVec(const char* path) {
-        return emitVec(path, false);
+        return emitVec(path, MemoryOnlyVec);
     }
 
     int emitCheckedVecWithDeterminer(const char* path) {
-        return emitVec(path, true);
+        return emitVec(path, DeterminerVec);
+    }
+
+    int emitCheckedVecFullChip(const char* path) {
+        if (model_.determinerCount() != COMBINING_TREE_INPUT_COUNT) {
+            fprintf(stderr, "error: the full chip vec needs exactly %d determiners, this run has "
+                    "%d; CombTree_2lvl is a fixed two level tree\n",
+                    COMBINING_TREE_INPUT_COUNT, model_.determinerCount());
+            return 1;
+        }
+        if (model_.rowCount() != (1 << DECODER_ADDRESS_BIT_COUNT)) {
+            fprintf(stderr, "error: the full chip vec needs %d rows to match the %d bit decoder, "
+                    "this run has %d\n", 1 << DECODER_ADDRESS_BIT_COUNT,
+                    DECODER_ADDRESS_BIT_COUNT, model_.rowCount());
+            return 1;
+        }
+        return emitVec(path, FullChipVec);
     }
 
     OperationModel& model() { return model_; }
@@ -829,17 +1179,22 @@ private:
     std::vector<Operation> operations_;
     std::vector<OperationResult> results_;
 
-    int emitVec(const char* path, bool include_determiner) {
+    int emitVec(const char* path, VecFlavour flavour) {
         std::ofstream output(path);
         if (!output) {
             fprintf(stderr, "error: cannot open vec file '%s' for writing\n", path);
             return 1;
         }
+        int operation_period = (flavour == FullChipVec) ? FULL_CHIP_OPERATION_PERIOD
+                                                        : OPERATION_PERIOD;
+        const char* flavour_text = "";
+        if (flavour == DeterminerVec) flavour_text = " with determiner columns";
+        else if (flavour == FullChipVec) flavour_text = " with decoder, determiner and tree columns";
         VecEmitter emitter(model_.rowCount(), model_.vidBitCount());
-        emitter.emit(output, operations_, results_, include_determiner);
+        emitter.emit(output, operations_, results_, flavour);
         printf("golden model: %d operations, checked vec written to %s (end time %d ns)%s\n",
-               (int)operations_.size(), path, (int)operations_.size() * OPERATION_PERIOD,
-               include_determiner ? " with determiner columns" : "");
+               (int)operations_.size(), path, (int)operations_.size() * operation_period,
+               flavour_text);
         return 0;
     }
 
@@ -894,6 +1249,42 @@ private:
 // order; setting it to false makes this model reproduce that wiring, including the illegal code
 // that a stored x then produces.
 //
+// The Combining Tree model. CombTree_2lvl (Combining_Tree_2lvl/verilog_code/
+// combining_tree_verilog.v) reduces the four determiner verdicts to one chip level answer.
+// evaluateCombiningTreeNode transcribes the reconstructed node gate for gate, internal nets n1 to
+// n8 included, and evaluateCombiningTree wires three of them the way the CombTree_2lvl module
+// does: one node over determiners 0 and 1, one over 2 and 3, one over those two results, then
+// CID_out[1] = select_top and CID_out[0] = select_top ? select_23 : select_01. The equations are
+// left unsimplified on purpose, for the same reason the determiner stages are: illegal input
+// combinations must reach the output the way the gates would produce them, not the way a tidy
+// Boolean identity would. For legal determiner states they reduce to CONF = CONF_L | CONF_R
+// (a conflict in any clause is a chip level conflict, the opposite of the determiner's internal
+// AND over pairs), DONE = DONE_L & DONE_R, and UP = (UP_L | UP_R) & ~CONF, which is the paper's
+// BACKTRACK over UP priority. If any of the four determiners is not comparable, all seven tree
+// columns are '-'.
+//
+// verifyCombiningTreeAgainstSolver grounds the tree in minisat under the same contract as the
+// determiner check: warnings only, never a change to an emitted value, and only while every row
+// agrees with solver.hardwareValue for its VID. It derives the three verdict bits from
+// Solver::value over the rebuilt literals, so CONF means some clause has every literal false,
+// DONE means every clause has a true literal, and UP means a unit clause exists with no conflict
+// anywhere. When UP is set it also checks the row named by {CID_out, LID_out}: that row must hold
+// the one unassigned literal of an otherwise false clause. That last check is the only one that
+// validates LID_out and CID_out rather than the verdict bits alone. It pins them uniquely when
+// exactly one clause is unit; when two or more are unit it can only confirm the tree named a
+// legal one, because which of several simultaneously unit clauses wins is the tree's own
+// arbitration and has no minisat referent.
+//
+// The Decoder model. Decoder_4to16 (cell Decoder, A_in[3:0] to D_out[15:0]) replaces the 16 one
+// hot ADDR_IN pins with a 4 bit binary address, so the full chip vec drives DECODER_ADDRESS_BIT_
+// COUNT address bits and checks D_out as expected outputs. decoderOutputText is the whole model:
+// one hot at the addressed row. Search operations drive A_in = 0000. A decoder with no enable
+// always asserts one line, so there is no longer a "no row selected" code, but a search holds
+// WE_CAM = 0 and SRAM_WL_mode = 0, and SRAM_WL_mode = 0 selects the matchline path over the
+// address path, so the hot line cannot reach a wordline. D_out columns are '-' on the first data
+// row of each operation, where A_in changes, and asserted on every later row, since the decoder is
+// combinational and its output is only trustworthy once the address has been stable.
+//
 // verifyDeterminersAgainstSolver is a validation aid that never changes an emitted value. It
 // rebuilds the clause as real Lits and compares Solver::satisfied against the modelled DONE. It
 // runs only when every row in the clause agrees with solver.hardwareValue for its VID, because
@@ -933,8 +1324,14 @@ private:
 // snapshots accumulate in results_ and all emitters iterate them.
 //   emitCheckedVec                targets the bare Submodule_4x16; memory columns only
 //   emitCheckedVecWithDeterminer  targets BCP_Top_4x16_4det; adds 5 columns per determiner
-// The determiner pins exist only on the wrapper, so the two flavours are not interchangeable.
-// Determiner state is computed either way and always appears in the results log.
+//   emitCheckedVecFullChip        targets the full chip (decoder + array + 4 determiners + tree);
+//                                 drives A_in[3:0] in place of the 16 ADDR_IN pins and adds
+//                                 D_out[15:0] plus 7 tree columns. Requires exactly 16 rows and
+//                                 4 determiners, since CombTree_2lvl is a fixed two level tree
+//                                 and the decoder is a fixed 4 bit decoder.
+// The determiner and tree pins exist only on their wrappers, so the three flavours are not
+// interchangeable. Determiner and tree state is computed whichever flavour is emitted, and always
+// appears in the results log.
 //
 // VecEmitter owns all timing; the model itself is timing free. Recipes follow genVecFile.py
 // and the expanded 4x16 vec files, each op in a 10 ns slot:
@@ -968,3 +1365,20 @@ private:
 // on the settle row. Reads add no settle row since they change no storage. Both settle offsets
 // stay inside the 10 ns slot, so no timing outside these columns moves, and emitCheckedVec never
 // enters this branch at all.
+//
+// Combining Tree settling. The tree stacks its own logic delay on top of the determiner, so the
+// full chip flavour adds a second trailing row at commit + COMBINING_TREE_SETTLE_OFFSET, 2 ns
+// after the determiner settle row, again copying the preceding row's control tokens verbatim.
+// Tree columns hold the previous verdict before the commit, are '-' from the commit row through
+// the determiner settle row, and carry the new verdict on the tree settle row. A search commits at
+// +7, so its tree row lands at +11 and does not fit a 10 ns slot: the full chip flavour therefore
+// uses FULL_CHIP_OPERATION_PERIOD = 12 while the other two keep OPERATION_PERIOD = 10. Rows land
+// at +8 then +10 for a write and +9 then +11 for a search.
+//
+// The 2 ns increment is inherited from the determiner offset rather than measured. For reference,
+// Determiner/reports gives Design Compiler arrival times of 0.087 ns for DET_StageOne, 0.106 ns
+// for DET_StageTwo and 0.132 ns for DET_StageThree, so DET_Hier is roughly 0.33 ns end to end;
+// CombTree_2lvl has no timing report at all but is structurally comparable. Those numbers are
+// 65nm typical corner with zero wire load, so both settle offsets are deliberately generous. If a
+// clean run shows the margin is real, the two settle rows can be collapsed into one at commit + 2
+// and the slot returned to 10 ns.

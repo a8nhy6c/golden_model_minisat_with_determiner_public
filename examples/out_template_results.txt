@@ -1,0 +1,237 @@
+config n=16 k=4
+
+op 1 write row=0 vid=1 val=x pol=0
+q_val 01------------------------------
+q_pol 0---------------
+conf_det ----
+up_det ----
+done_det ----
+lid_det --------
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 2 write row=1 vid=1 val=x pol=0
+q_val 0101----------------------------
+q_pol 00--------------
+conf_det ----
+up_det ----
+done_det ----
+lid_det --------
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 3 write row=2 vid=2 val=x pol=0
+q_val 010101--------------------------
+q_pol 000-------------
+conf_det ----
+up_det ----
+done_det ----
+lid_det --------
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 4 write row=3 vid=3 val=x pol=0
+q_val 01010101------------------------
+q_pol 0000------------
+conf_det 0---
+up_det 0---
+done_det 0---
+lid_det 00------
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 5 write row=4 vid=4 val=x pol=0
+q_val 0101010101----------------------
+q_pol 00000-----------
+conf_det 0---
+up_det 0---
+done_det 0---
+lid_det 00------
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 6 write row=5 vid=5 val=x pol=0
+q_val 010101010101--------------------
+q_pol 000000----------
+conf_det 0---
+up_det 0---
+done_det 0---
+lid_det 00------
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 7 write row=6 vid=6 val=x pol=0
+q_val 01010101010101------------------
+q_pol 0000000---------
+conf_det 0---
+up_det 0---
+done_det 0---
+lid_det 00------
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 8 write row=7 vid=7 val=x pol=0
+q_val 0101010101010101----------------
+q_pol 00000000--------
+conf_det 00--
+up_det 00--
+done_det 00--
+lid_det 0000----
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 9 write row=8 vid=8 val=x pol=0
+q_val 010101010101010101--------------
+q_pol 000000000-------
+conf_det 00--
+up_det 00--
+done_det 00--
+lid_det 0000----
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 10 write row=9 vid=9 val=x pol=0
+q_val 01010101010101010101------------
+q_pol 0000000000------
+conf_det 00--
+up_det 00--
+done_det 00--
+lid_det 0000----
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 11 write row=10 vid=10 val=x pol=0
+q_val 0101010101010101010101----------
+q_pol 00000000000-----
+conf_det 00--
+up_det 00--
+done_det 00--
+lid_det 0000----
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 12 write row=11 vid=11 val=x pol=0
+q_val 010101010101010101010101--------
+q_pol 000000000000----
+conf_det 000-
+up_det 000-
+done_det 000-
+lid_det 000000--
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 13 write row=12 vid=12 val=x pol=0
+q_val 01010101010101010101010101------
+q_pol 0000000000000---
+conf_det 000-
+up_det 000-
+done_det 000-
+lid_det 000000--
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 14 write row=13 vid=13 val=x pol=0
+q_val 0101010101010101010101010101----
+q_pol 00000000000000--
+conf_det 000-
+up_det 000-
+done_det 000-
+lid_det 000000--
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 15 write row=14 vid=14 val=x pol=0
+q_val 010101010101010101010101010101--
+q_pol 000000000000000-
+conf_det 000-
+up_det 000-
+done_det 000-
+lid_det 000000--
+tree_conf -
+tree_up -
+tree_done -
+tree_lid --
+tree_cid --
+
+op 16 write row=15 vid=15 val=x pol=0
+q_val 01010101010101010101010101010101
+q_pol 0000000000000000
+conf_det 0000
+up_det 0000
+done_det 0000
+lid_det 00000000
+tree_conf 0
+tree_up 0
+tree_done 0
+tree_lid 00
+tree_cid 00
+
+op 17 search vid=1 val=0
+matched rows=0,1
+q_val 00000101010101010101010101010101
+q_pol 0000000000000000
+conf_det 0000
+up_det 0000
+done_det 0000
+lid_det 00000000
+tree_conf 0
+tree_up 0
+tree_done 0
+tree_lid 00
+tree_cid 00
+
+op 18 search vid=2 val=0
+matched rows=2
+q_val 00000001010101010101010101010101
+q_pol 0000000000000000
+conf_det 0000
+up_det 1000
+done_det 0000
+lid_det 11000000
+tree_conf 0
+tree_up 1
+tree_done 0
+tree_lid 11
+tree_cid 00

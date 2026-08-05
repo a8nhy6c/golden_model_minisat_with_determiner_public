@@ -68,10 +68,11 @@ __pycache__/
 examples/expanded_all_ops
 examples/determiner_ops
 examples/template_ops
+examples/fullchip_ops
+examples/out_fullchip_results.txt
 examples/out_results.txt
 examples/out_checked.vec
 examples/out_determiner_results.txt
 examples/out_determiner.vec
-examples/out_template_results.txt
-examples/out_template.vec
 *.dSYM/
+notes.md
