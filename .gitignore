@@ -69,6 +69,7 @@ examples/expanded_all_ops
 examples/determiner_ops
 examples/template_ops
 examples/fullchip_ops
+examples/fullchip_ops.cpp
 examples/out_fullchip_results.txt
 examples/out_results.txt
 examples/out_checked.vec
