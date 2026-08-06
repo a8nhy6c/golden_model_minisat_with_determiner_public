@@ -591,7 +591,7 @@ private:
     std::string decoderOutputText(const Operation& operation) const {
         int addressed_row = (operation.kind == Operation::SearchOperation) ? 0 : operation.row;
         std::string text;
-        for (int row = 0; row < row_count_; row++)
+        for (int row = row_count_ - 1; row >= 0; row--)
             text += (row == addressed_row) ? '1' : '0';
         return text;
     }
@@ -993,7 +993,7 @@ private:
             }
         }
         if (include_full_chip) {
-            for (int row = 0; row < row_count_; row++) output << " D_out_" << row;
+            for (int row = row_count_ - 1; row >= 0; row--) output << " D_out_" << row;
             output << " CONF UP DONE LID_out_1 LID_out_0 CID_out_1 CID_out_0";
         }
         output << "\n";
@@ -1284,6 +1284,14 @@ private:
 // address path, so the hot line cannot reach a wordline. D_out columns are '-' on the first data
 // row of each operation, where A_in changes, and asserted on every later row, since the decoder is
 // combinational and its output is only trustworthy once the address has been stable.
+//
+// Both new column groups are emitted MSB first, A_in_3 down to A_in_0 and D_out_15 down to
+// D_out_0, so a vec row reads as the bus value written the usual way: A_in = 0001 prints its
+// D_out group as 0000000000000010, the 1 in the D_out_1 column. This matches LID_out_1 LID_out_0
+// and the determiner LID_det columns, and it is the reason decoderOutputText and the vname loop
+// both count down. Q_Val and Q_Pol keep their ascending, per row order, since those characters
+// index storage nodes rather than a bus. Nothing depends on either order beyond the two loops,
+// since Cadence binds every column by the name in vname.
 //
 // verifyDeterminersAgainstSolver is a validation aid that never changes an emitted value. It
 // rebuilds the clause as real Lits and compares Solver::satisfied against the modelled DONE. It

@@ -445,6 +445,12 @@ minisat referent.
 pins with a 4 bit binary address. The model is one function, `decoderOutputText`: one hot at the
 addressed row.
 
+Both new column groups are emitted MSB first, `A_in_3` down to `A_in_0` and `D_out_15` down to
+`D_out_0`, so a vec row reads as the bus value written the usual way: `A_in = 0001` prints its
+`D_out` group as `0000000000000010`, the 1 sitting in the `D_out_1` column. This matches the
+`LID_out` and `LID_det` columns. `Q_Val` and `Q_Pol` keep their ascending per row order, since
+those characters index storage nodes rather than a bus.
+
 Searches drive `A_in = 0000`. A decoder with no enable always asserts exactly one line, so there is
 no longer a "no row selected" state, but a search holds `WE_CAM = 0` and `SRAM_WL_mode = 0`, and
 `SRAM_WL_mode = 0` selects the matchline path over the address path, so the hot line cannot reach a
