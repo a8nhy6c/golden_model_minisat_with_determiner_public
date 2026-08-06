@@ -82,6 +82,7 @@ static const int DETERMINER_SETTLE_OFFSET = 2;
 static const int COMBINING_TREE_INPUT_COUNT = 4;
 static const int COMBINING_TREE_SETTLE_OFFSET = 4;
 static const int DECODER_ADDRESS_BIT_COUNT = 4;
+static const bool DECODER_ASSERTS_REVERSED_ONE_HOT = true;
 
 inline lbool valbits_to_lbool(int value_bits) {
     if (value_bits == VALBITS_FALSE) return Minisat::l_False;
@@ -590,9 +591,11 @@ private:
 
     std::string decoderOutputText(const Operation& operation) const {
         int addressed_row = (operation.kind == Operation::SearchOperation) ? 0 : operation.row;
+        int asserted_line = DECODER_ASSERTS_REVERSED_ONE_HOT
+                            ? (row_count_ - 1 - addressed_row) : addressed_row;
         std::string text;
-        for (int row = row_count_ - 1; row >= 0; row--)
-            text += (row == addressed_row) ? '1' : '0';
+        for (int line = row_count_ - 1; line >= 0; line--)
+            text += (line == asserted_line) ? '1' : '0';
         return text;
     }
 
@@ -1278,7 +1281,7 @@ private:
 // The Decoder model. Decoder_4to16 (cell Decoder, A_in[3:0] to D_out[15:0]) replaces the 16 one
 // hot ADDR_IN pins with a 4 bit binary address, so the full chip vec drives DECODER_ADDRESS_BIT_
 // COUNT address bits and checks D_out as expected outputs. decoderOutputText is the whole model:
-// one hot at the addressed row. Search operations drive A_in = 0000. A decoder with no enable
+// one asserted line per address. Search operations drive A_in = 0000. A decoder with no enable
 // always asserts one line, so there is no longer a "no row selected" code, but a search holds
 // WE_CAM = 0 and SRAM_WL_mode = 0, and SRAM_WL_mode = 0 selects the matchline path over the
 // address path, so the hot line cannot reach a wordline. D_out columns are '-' on the first data
@@ -1292,6 +1295,15 @@ private:
 // both count down. Q_Val and Q_Pol keep their ascending, per row order, since those characters
 // index storage nodes rather than a bus. Nothing depends on either order beyond the two loops,
 // since Cadence binds every column by the name in vname.
+//
+// Which D_out line an address asserts is a separate question from that print order, and it is the
+// one DECODER_ASSERTS_REVERSED_ONE_HOT selects. The default true is the reversed scheme: address r
+// asserts D_out_(row_count - 1 - r), so A_in = 0001 asserts D_out_14 and a search, which drives
+// A_in = 0000, asserts D_out_15. Setting the flag to false gives plain one hot, where address r
+// asserts D_out_r. The two differ in the signal the vec checks, not in formatting, so they are not
+// interchangeable: each matches a different physical wiring of the Decoder_4to16 D_out bus onto the
+// array wordlines, and no Verilog for that cell exists in the repo to settle which is right. See
+// notes.md section 8.
 //
 // verifyDeterminersAgainstSolver is a validation aid that never changes an emitted value. It
 // rebuilds the clause as real Lits and compares Solver::satisfied against the modelled DONE. It

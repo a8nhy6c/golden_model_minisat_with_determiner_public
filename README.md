@@ -442,8 +442,15 @@ minisat referent.
 ## 10. The Decoder model, and what is still missing in hardware
 
 `Decoder_4to16` (cell `Decoder`, `A_in[3:0]` to `D_out[15:0]`) replaces the 16 one hot `ADDR_IN`
-pins with a 4 bit binary address. The model is one function, `decoderOutputText`: one hot at the
-addressed row.
+pins with a 4 bit binary address. The model is one function, `decoderOutputText`: one asserted line
+per address.
+
+Which line an address asserts is set by `DECODER_ASSERTS_REVERSED_ONE_HOT`. The default `true` is
+the reversed scheme, where address `r` asserts `D_out_(15 - r)`, so `A_in = 0001` asserts `D_out_14`
+and a search asserts `D_out_15`. Setting it to `false` gives plain one hot, address `r` asserts
+`D_out_r`. This changes which signal the vec checks, not how the row is formatted; the two match
+different physical wirings of the `D_out` bus onto the wordlines. `notes.md` section 8 has the
+detail.
 
 Both new column groups are emitted MSB first, `A_in_3` down to `A_in_0` and `D_out_15` down to
 `D_out_0`, so a vec row reads as the bus value written the usual way: `A_in = 0001` prints its
