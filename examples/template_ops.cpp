@@ -43,9 +43,10 @@ choice only changes which columns land in the vec.
                                   16 one hot ADDR_IN inputs, Q_Val / Q_Pol / read path outputs.
     emitCheckedVecWithDeterminer  targets BCP_Top_4x16_4det. Adds 5 columns per determiner.
     emitCheckedVecFullChip        targets the full chip: Decoder_4to16 + Submodule_4x16 +
-                                  4 DET_Hier + CombTree_2lvl. Drives A_in[3:0] in place of the
-                                  16 ADDR_IN pins, and adds D_out[15:0] plus the seven tree
-                                  columns CONF, UP, DONE, LID_out[1:0], CID_out[1:0]. Needs
+                                  4 DET_Hier + CombTree_2lvl. Drives A_in[3:0], named ADDR_IN_3
+                                  down to ADDR_IN_0, in place of the 16 one hot ADDR_IN pins, and
+                                  adds D_out[15:0] plus the seven tree columns CONF_OUT, UP_OUT,
+                                  DONE_OUT, Lit_Pos<1:0>, CID<1:0>. Needs
                                   exactly 16 rows and 4 determiners, and uses a 12 ns slot per
                                   operation instead of 10 ns to fit the tree settle row.
 

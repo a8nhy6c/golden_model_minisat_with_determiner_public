@@ -30,10 +30,10 @@ so the expected outputs can be checked by eye.
 This copy models the whole chip: the `Decoder_4to16`, the CAM + SRAM submodule, the per row
 Determiner that evaluates a clause from the stored literal values, and the two level Combining
 Tree that reduces the four clause verdicts to one chip level answer. It computes `CONF`, `UP`,
-`DONE` and `Lit_Pos` per clause (section 7) and chip level `CONF`, `UP`, `DONE`, `LID_out` and
-`CID_out` (section 9) after every operation, and can emit any of them as checked `.vec` columns.
+`DONE` and `LID` per clause (section 7) and chip level `CONF_OUT`, `UP_OUT`, `DONE_OUT`, `Lit_Pos`
+and `CID` (section 9) after every operation, and can emit any of them as checked `.vec` columns.
 
-Not modelled: the step from a named row back to a variable ID. `{CID_out, LID_out}` names the
+Not modelled: the step from a named row back to a variable ID. `{CID, Lit_Pos}` names the
 winning row, but turning that row into the VID it stores needs a read operation, since the array
 has no other path from a row to its stored key.
 
@@ -151,7 +151,15 @@ columns. Swap that one line for the DUT you intend to simulate:
 |---|---|---|
 | `emitCheckedVec` | bare `Submodule_4x16` | 16 one hot `ADDR_IN` in; `Q_Val` / `Q_Pol` / read path out |
 | `emitCheckedVecWithDeterminer` | `BCP_Top_4x16_4det` | the above plus 5 columns per determiner |
-| `emitCheckedVecFullChip` | decoder + array + 4 determiners + tree | `A_in[3:0]` in place of `ADDR_IN`; the above plus `D_out[15:0]` and 7 tree columns |
+| `emitCheckedVecFullChip` | decoder + array + 4 determiners + tree | binary `ADDR_IN[3:0]` in place of the 16 one hot pins; the above plus `D_out[15:0]` and 7 tree columns |
+
+Every `.vec` column is named after the hardware pin it drives or checks, since Cadence binds
+columns by the name on the `vname` line. Per determiner `d` those names are `CONF<d>`, `UP<d>`,
+`DONE<d>` and `LID<2d+1>` / `LID<2d>`; the chip level tree columns are `CONF_OUT`, `UP_OUT`,
+`DONE_OUT`, `Lit_Pos<1>` / `Lit_Pos<0>` and `CID<1>` / `CID<0>`. The `_OUT` suffix is what keeps the
+tree verdict distinct from determiner 0. Note that the decoder's address bits are also called
+`ADDR_IN<*>`, the same prefix the other two flavours use for their 16 one hot pins, so the only way
+to tell a binary `ADDR_IN` from a one hot one is whether the vec carries `D_out<0>`.
 
 The determiner and tree verdicts are computed whichever you pick and always appear in the results
 log; the choice only changes which columns land in the `.vec`. The full chip flavour needs exactly
@@ -174,10 +182,10 @@ Build any of them the same way, with `make examples/<name>`.
 
 ### 2.1 The 2 bit Val encoding
 
-The three literal values are stored in two SRAM cells per row, driven as `Val_IN_1 Val_IN_0` and
+The three literal values are stored in two SRAM cells per row, driven as `Val_IN<1> Val_IN<0>` and
 read back on the `Q_Val` nodes:
 
-| `val` character | `{Val_1, Val_0}` | meaning |
+| `val` character | `{Val<1>, Val<0>}` | meaning |
 |---|---|---|
 | `'0'` | `00` | literal value false |
 | `'x'` | `01` | variable unassigned |
@@ -246,8 +254,8 @@ tree_cid --
   name a row; both are only meaningful when `tree_up` is 1.
 - `matched rows=` appears after every search (informational; `CAM_ML` is not a port, so match
   correctness is verified indirectly through the Val write it causes).
-- `read vid= val= pol=` appears only after read operations and maps onto `VID_OUT_{k-1}..0` (MSB
-  first), `Val_OUT_1 Val_OUT_0`, `Pol_OUT` on the SenseEN strobe line. Reading a never written row
+- `read vid= val= pol=` appears only after read operations and maps onto `VID_OUT<k-1>` down to `VID_OUT<0>` (MSB
+  first), `Val_OUT<1> Val_OUT<0>`, `Pol_OUT` on the SenseEN strobe line. Reading a never written row
   gives `-` fields.
 
 This file is a log for humans; nothing parses it back. The checked `.vec` is produced from the same
@@ -270,7 +278,7 @@ for the settled state after that operation:
 
 - op boundaries and the op label come from the `; write ... / ; search ... / ; read ...` comment
   lines already present in the vec;
-- per row VID is recovered from the `ADDR_IN_*` and `VID_IN_*` input columns of write operations
+- per row VID is recovered from the `ADDR_IN<*>` and `VID_IN<*>` input columns of write operations
   whose `WE_CAM` is asserted (a `wecam=0` write leaves the row's VID unchanged);
 - the settled `Q_Val` / `Q_Pol` for an operation are read from the first data line of the next
   operation's block, which by the emitter's strobe policy (section 8) carries the previous
@@ -278,16 +286,17 @@ for the settled state after that operation:
   deferred commit. `-` cells are passed through verbatim (never written / do not compare).
 
 If the vec carries determiner columns, a second table per operation is appended with **Determiner,
-Rows, CONF, UP, DONE, Lit_Pos**. Those values come from the operation's own **last** data line, its
+Rows, CONF, UP, DONE, LID**. Those values come from the operation's own **last** data line, its
 settle row (section 7), not from the next operation's block. On a vec without determiner columns
 the script behaves exactly as before.
 
-If the vec carries tree columns, a third table is appended with **CONF, UP, DONE, CID_out,
-LID_out, Row named**, read from the operation's last data line, which on a full chip vec is the
+If the vec carries tree columns, a third table is appended with **CONF_OUT, UP_OUT, DONE_OUT, CID,
+Lit_Pos, Row named**, read from the operation's last data line, which on a full chip vec is the
 tree settle row. The last cell is the arithmetic the tree exists to enable:
-`CID_out * 4 + LID_out` is the row the chip is pointing at, filled in only when `UP` is 1. On a
-full chip vec the per row VID column is recovered from the `A_in_*` inputs instead of `ADDR_IN_*`,
-decoded the same way the `Decoder_4to16` cell decodes them.
+`CID * 4 + Lit_Pos` is the row the chip is pointing at, filled in only when `UP_OUT` is 1. On a
+full chip vec the `ADDR_IN<*>` columns are 4 binary address bits rather than 16 one hot pins, so the
+per row VID column is recovered by decoding them the same way the `Decoder_4to16` cell does. The
+script tells the two apart by looking for `D_out<0>`, which only a full chip vec carries.
 
 ## 5. Bundled MiniSAT
 
@@ -446,16 +455,16 @@ pins with a 4 bit binary address. The model is one function, `decoderOutputText`
 per address.
 
 Which line an address asserts is set by `DECODER_ASSERTS_REVERSED_ONE_HOT`. The default `true` is
-the reversed scheme, where address `r` asserts `D_out_(15 - r)`, so `A_in = 0001` asserts `D_out_14`
-and a search asserts `D_out_15`. Setting it to `false` gives plain one hot, address `r` asserts
-`D_out_r`. This changes which signal the vec checks, not how the row is formatted; the two match
+the reversed scheme, where address `r` asserts `D_out<15 - r>`, so `A_in = 0001` asserts `D_out<14>`
+and a search asserts `D_out<15>`. Setting it to `false` gives plain one hot, address `r` asserts
+`D_out<r>`. This changes which signal the vec checks, not how the row is formatted; the two match
 different physical wirings of the `D_out` bus onto the wordlines. `notes.md` section 8 has the
 detail.
 
-Both new column groups are emitted MSB first, `A_in_3` down to `A_in_0` and `D_out_15` down to
-`D_out_0`, so a vec row reads as the bus value written the usual way: `A_in = 0001` prints its
-`D_out` group as `0000000000000010`, the 1 sitting in the `D_out_1` column. This matches the
-`LID_out` and `LID_det` columns. `Q_Val` and `Q_Pol` keep their ascending per row order, since
+Both new column groups are emitted MSB first, `ADDR_IN<3>` down to `ADDR_IN<0>` and `D_out<15>` down
+to `D_out<0>`, so a vec row reads as the bus value written the usual way: `A_in = 0001` prints its
+`D_out` group as `0000000000000010`, the 1 sitting in the `D_out<1>` column. This matches the
+`Lit_Pos` and `LID` columns. `Q_Val` and `Q_Pol` keep their ascending per row order, since
 those characters index storage nodes rather than a bus.
 
 Searches drive `A_in = 0000`. A decoder with no enable always asserts exactly one line, so there is

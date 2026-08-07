@@ -974,30 +974,31 @@ private:
 
         output << "vname SenseEN ReadEN MLPRE_EN SLPRE_high SLPRE_low WE_CAM SearchEN WE_SRAM"
                   " SRAM_WL_mode BLPRE_EN";
-        for (int bit = vid_bit_count_ - 1; bit >= 0; bit--) output << " VID_IN_" << bit;
-        output << " Val_IN_1 Val_IN_0 Pol_IN";
+        for (int bit = vid_bit_count_ - 1; bit >= 0; bit--) output << " VID_IN<" << bit << ">";
+        output << " Val_IN<1> Val_IN<0> Pol_IN";
         if (include_full_chip) {
             for (int bit = DECODER_ADDRESS_BIT_COUNT - 1; bit >= 0; bit--)
-                output << " A_in_" << bit;
+                output << " ADDR_IN<" << bit << ">";
         } else {
-            for (int row = 0; row < row_count_; row++) output << " ADDR_IN_" << row;
+            for (int row = 0; row < row_count_; row++) output << " ADDR_IN<" << row << ">";
         }
-        for (int bit = vid_bit_count_ - 1; bit >= 0; bit--) output << " VID_OUT_" << bit;
-        output << " Val_OUT_1 Val_OUT_0 Pol_OUT";
-        for (int position = 0; position < 2 * row_count_; position++) output << " Q_Val_" << position;
-        for (int row = 0; row < row_count_; row++) output << " Q_Pol_" << row;
+        for (int bit = vid_bit_count_ - 1; bit >= 0; bit--) output << " VID_OUT<" << bit << ">";
+        output << " Val_OUT<1> Val_OUT<0> Pol_OUT";
+        for (int position = 0; position < 2 * row_count_; position++)
+            output << " Q_Val<" << position << ">";
+        for (int row = 0; row < row_count_; row++) output << " Q_Pol<" << row << ">";
         if (include_determiner) {
             for (int determiner = 0; determiner < determiner_count_; determiner++) {
-                output << " CONF_det_" << determiner;
-                output << " UP_det_" << determiner;
-                output << " DONE_det_" << determiner;
-                output << " LID_det_" << (2 * determiner + 1);
-                output << " LID_det_" << (2 * determiner);
+                output << " CONF<" << determiner << ">";
+                output << " UP<" << determiner << ">";
+                output << " DONE<" << determiner << ">";
+                output << " LID<" << (2 * determiner + 1) << ">";
+                output << " LID<" << (2 * determiner) << ">";
             }
         }
         if (include_full_chip) {
-            for (int row = row_count_ - 1; row >= 0; row--) output << " D_out_" << row;
-            output << " CONF UP DONE LID_out_1 LID_out_0 CID_out_1 CID_out_0";
+            for (int row = row_count_ - 1; row >= 0; row--) output << " D_out<" << row << ">";
+            output << " CONF_OUT UP_OUT DONE_OUT Lit_Pos<1> Lit_Pos<0> CID<1> CID<0>";
         }
         output << "\n";
 
@@ -1288,22 +1289,32 @@ private:
 // row of each operation, where A_in changes, and asserted on every later row, since the decoder is
 // combinational and its output is only trustworthy once the address has been stable.
 //
-// Both new column groups are emitted MSB first, A_in_3 down to A_in_0 and D_out_15 down to
-// D_out_0, so a vec row reads as the bus value written the usual way: A_in = 0001 prints its
-// D_out group as 0000000000000010, the 1 in the D_out_1 column. This matches LID_out_1 LID_out_0
-// and the determiner LID_det columns, and it is the reason decoderOutputText and the vname loop
+// Both new column groups are emitted MSB first, ADDR_IN<3> down to ADDR_IN<0> and D_out<15> down to
+// D_out<0>, so a vec row reads as the bus value written the usual way: A_in = 0001 prints its
+// D_out group as 0000000000000010, the 1 in the D_out<1> column. This matches Lit_Pos<1> Lit_Pos<0>
+// and the determiner LID columns, and it is the reason decoderOutputText and the vname loop
 // both count down. Q_Val and Q_Pol keep their ascending, per row order, since those characters
 // index storage nodes rather than a bus. Nothing depends on either order beyond the two loops,
 // since Cadence binds every column by the name in vname.
 //
 // Which D_out line an address asserts is a separate question from that print order, and it is the
 // one DECODER_ASSERTS_REVERSED_ONE_HOT selects. The default true is the reversed scheme: address r
-// asserts D_out_(row_count - 1 - r), so A_in = 0001 asserts D_out_14 and a search, which drives
-// A_in = 0000, asserts D_out_15. Setting the flag to false gives plain one hot, where address r
-// asserts D_out_r. The two differ in the signal the vec checks, not in formatting, so they are not
+// asserts D_out<row_count - 1 - r>, so A_in = 0001 asserts D_out<14> and a search, which drives
+// A_in = 0000, asserts D_out<15>. Setting the flag to false gives plain one hot, where address r
+// asserts D_out<r>. The two differ in the signal the vec checks, not in formatting, so they are not
 // interchangeable: each matches a different physical wiring of the Decoder_4to16 D_out bus onto the
 // array wordlines, and no Verilog for that cell exists in the repo to settle which is right. See
 // notes.md section 8.
+//
+// Vec column names follow the hardware pin names rather than the model's internal names, since
+// Cadence binds every column by the name in vname and those names have to match the netlist. The
+// decoder address bits are ADDR_IN<3> down to ADDR_IN<0> in the full chip flavour, the same prefix
+// the other two flavours use for their 16 one hot pins, so the two cannot be told apart by name
+// alone. Anything reading a vec back should key off the presence of D_out<0> to decide whether
+// ADDR_IN is binary or one hot, which is what vec_to_markdown.py does. The per determiner columns
+// are CONF<d>, UP<d>, DONE<d> and LID<2d+1> LID<2d>; the chip level Combining Tree columns are
+// CONF_OUT, UP_OUT, DONE_OUT, Lit_Pos<1> Lit_Pos<0> and CID<1> CID<0>. The _OUT suffix is what keeps
+// the tree verdict distinct from determiner 0's CONF<0>, UP<0> and DONE<0>.
 //
 // verifyDeterminersAgainstSolver is a validation aid that never changes an emitted value. It
 // rebuilds the clause as real Lits and compares Solver::satisfied against the modelled DONE. It
@@ -1325,7 +1336,7 @@ private:
 // rows whose VID was actually written; a never written CAM row holds a random VID on real
 // silicon and no model can predict it.
 //
-// Value encoding. The hardware 2 bit Val {Val_1, Val_0} is 00=false, 01=x, 11=true, and 10 is
+// Value encoding. The hardware 2 bit Val {Val<1>, Val<0>} is 00=false, 01=x, 11=true, and 10 is
 // illegal and never written. This is the encoding the Determiner reads: DET_StageOne.v decodes
 // {Val1, Val0, Pol} with 11x as ONE / INV_ZERO, 00x as ZERO / INV_ONE, 01x as UNKNOWN /
 // INV_UNKNOWN, and 10x as ERROR0 / ERROR1. The three legal codes are named VALBITS_FALSE,

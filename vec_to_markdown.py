@@ -17,23 +17,27 @@ def parse_header(lines):
         column_index[name] = position
 
     vid_bit_count = 0
-    while ("VID_IN_" + str(vid_bit_count)) in column_index:
+    while ("VID_IN<%d>" % vid_bit_count) in column_index:
         vid_bit_count += 1
     row_count = 0
-    while ("Q_Pol_" + str(row_count)) in column_index:
+    while ("Q_Pol<%d>" % row_count) in column_index:
         row_count += 1
     if vid_bit_count == 0 or row_count == 0:
-        raise ValueError("could not infer k (VID_IN_*) or n (Q_Pol_*) from vname")
+        raise ValueError("could not infer k (VID_IN<*>) or n (Q_Pol<*>) from vname")
 
     determiner_count = 0
-    while ("CONF_det_" + str(determiner_count)) in column_index:
+    while ("CONF<%d>" % determiner_count) in column_index:
         determiner_count += 1
 
+    # A full chip vec carries the decoder, so its ADDR_IN columns are the 4 binary address bits;
+    # the other two flavours use the same prefix for 16 one hot pins. D_out<0> is what tells them
+    # apart, since only the full chip vec checks decoder outputs.
     address_bit_count = 0
-    while ("A_in_" + str(address_bit_count)) in column_index:
-        address_bit_count += 1
+    if "D_out<0>" in column_index:
+        while ("ADDR_IN<%d>" % address_bit_count) in column_index:
+            address_bit_count += 1
 
-    has_combining_tree = "CID_out_0" in column_index
+    has_combining_tree = "CID<0>" in column_index
 
     return (column_index, vid_bit_count, row_count, determiner_count, address_bit_count,
             has_combining_tree)
@@ -78,17 +82,17 @@ def column_value(tokens, column_index, name):
 def read_vid_from_write(tokens, column_index, vid_bit_count):
     bits = ""
     for bit in range(vid_bit_count - 1, -1, -1):
-        bits += column_value(tokens, column_index, "VID_IN_" + str(bit))
+        bits += column_value(tokens, column_index, "VID_IN<%d>" % bit)
     return bits
 
 
 def snapshot_of_line(tokens, column_index, row_count):
     q_val = []
     for position in range(2 * row_count):
-        q_val.append(column_value(tokens, column_index, "Q_Val_" + str(position)))
+        q_val.append(column_value(tokens, column_index, "Q_Val<%d>" % position))
     q_pol = []
     for row in range(row_count):
-        q_pol.append(column_value(tokens, column_index, "Q_Pol_" + str(row)))
+        q_pol.append(column_value(tokens, column_index, "Q_Pol<%d>" % row))
     return q_val, q_pol
 
 
@@ -97,11 +101,11 @@ def determiner_snapshot_of_line(tokens, column_index, determiner_count):
     # determiner columns carry that operation's verdict rather than '-' or the previous verdict.
     verdicts = []
     for determiner in range(determiner_count):
-        conflict = column_value(tokens, column_index, "CONF_det_%d" % determiner)
-        unit = column_value(tokens, column_index, "UP_det_%d" % determiner)
-        done = column_value(tokens, column_index, "DONE_det_%d" % determiner)
-        position_high = column_value(tokens, column_index, "LID_det_%d" % (2 * determiner + 1))
-        position_low = column_value(tokens, column_index, "LID_det_%d" % (2 * determiner))
+        conflict = column_value(tokens, column_index, "CONF<%d>" % determiner)
+        unit = column_value(tokens, column_index, "UP<%d>" % determiner)
+        done = column_value(tokens, column_index, "DONE<%d>" % determiner)
+        position_high = column_value(tokens, column_index, "LID<%d>" % (2 * determiner + 1))
+        position_low = column_value(tokens, column_index, "LID<%d>" % (2 * determiner))
         verdicts.append((conflict, unit, done, position_high + position_low))
     return verdicts
 
@@ -109,31 +113,31 @@ def determiner_snapshot_of_line(tokens, column_index, determiner_count):
 def combining_tree_snapshot_of_line(tokens, column_index):
     # Read from the operation's last data line, the tree settle row, which is the one line whose
     # tree columns carry this operation's verdict rather than '-' or the previous verdict.
-    conflict = column_value(tokens, column_index, "CONF")
-    unit = column_value(tokens, column_index, "UP")
-    done = column_value(tokens, column_index, "DONE")
-    literal_position = (column_value(tokens, column_index, "LID_out_1")
-                        + column_value(tokens, column_index, "LID_out_0"))
-    clause_position = (column_value(tokens, column_index, "CID_out_1")
-                       + column_value(tokens, column_index, "CID_out_0"))
+    conflict = column_value(tokens, column_index, "CONF_OUT")
+    unit = column_value(tokens, column_index, "UP_OUT")
+    done = column_value(tokens, column_index, "DONE_OUT")
+    literal_position = (column_value(tokens, column_index, "Lit_Pos<1>")
+                        + column_value(tokens, column_index, "Lit_Pos<0>"))
+    clause_position = (column_value(tokens, column_index, "CID<1>")
+                       + column_value(tokens, column_index, "CID<0>"))
     return conflict, unit, done, literal_position, clause_position
 
 
 def addressed_row_of_operation(data_lines, column_index, row_count, address_bit_count):
     # A vec built for the bare array or the determiner wrapper carries 16 one hot ADDR_IN columns;
-    # a full chip vec carries the decoder's 4 bit A_in instead, so the row has to be decoded here
-    # the same way the Decoder_4to16 cell decodes it.
+    # a full chip vec carries the decoder's 4 bit binary ADDR_IN instead, so the row has to be
+    # decoded here the same way the Decoder_4to16 cell decodes it.
     if address_bit_count:
         for tokens in data_lines:
             bits = ""
             for bit in range(address_bit_count - 1, -1, -1):
-                bits += column_value(tokens, column_index, "A_in_" + str(bit))
+                bits += column_value(tokens, column_index, "ADDR_IN<%d>" % bit)
             if all(character in "01" for character in bits):
                 return int(bits, 2)
         return None
     for row in range(row_count):
         for tokens in data_lines:
-            if column_value(tokens, column_index, "ADDR_IN_" + str(row)) == "1":
+            if column_value(tokens, column_index, "ADDR_IN<%d>" % row) == "1":
                 return row
     return None
 
@@ -146,20 +150,20 @@ def emit_markdown(operations, column_index, vid_bit_count, row_count, determiner
     output.append("")
     output.append("Reconstructed purely from the `.vec` stimulus file. Each table below is the "
                   "settled state the vec expects after one write or search operation. `Q_Val` is "
-                  "the two storage nodes of a row (`Q_Val_{2r}` `Q_Val_{2r+1}`); `Q_Pol` is the "
+                  "the two storage nodes of a row (`Q_Val<2r>` `Q_Val<2r+1>`); `Q_Pol` is the "
                   "polarity node. `-` means the vec asserts nothing for that node (never written / "
                   "do not compare).")
     output.append("")
     if determiner_count:
         output.append("A second table per operation gives the Determiner verdict for each clause, "
-                      "read from that operation's settle row. `Lit_Pos` is only meaningful when "
+                      "read from that operation's settle row. `LID` is only meaningful when "
                       "`UP` is 1.")
         output.append("")
     if has_combining_tree:
         output.append("A third table gives the chip level Combining Tree verdict, read from the "
-                      "tree settle row. `CID_out` names the winning clause and `LID_out` the "
+                      "tree settle row. `CID` names the winning clause and `Lit_Pos` the "
                       "literal within it, so together they name a row; both are only meaningful "
-                      "when `UP` is 1.")
+                      "when `UP_OUT` is 1.")
         output.append("")
     output.append("Config: n=%d rows, k=%d VID bits, %d determiners."
                   % (row_count, vid_bit_count, determiner_count))
@@ -214,7 +218,7 @@ def emit_markdown(operations, column_index, vid_bit_count, row_count, determiner
             literals_per_determiner = row_count // determiner_count
             verdicts = determiner_snapshot_of_line(
                 operation["data_lines"][-1], column_index, determiner_count)
-            output.append("| Determiner | Rows | CONF | UP | DONE | Lit_Pos |")
+            output.append("| Determiner | Rows | CONF | UP | DONE | LID |")
             output.append("|---|---|---|---|---|---|")
             for determiner in range(determiner_count):
                 conflict, unit, done, position = verdicts[determiner]
@@ -234,7 +238,8 @@ def emit_markdown(operations, column_index, vid_bit_count, row_count, determiner
                 literals_per_determiner = row_count // determiner_count
                 named_row = str(int(clause_position, 2) * literals_per_determiner
                                 + int(literal_position, 2))
-            output.append("| Combining tree | CONF | UP | DONE | CID_out | LID_out | Row named |")
+            output.append("| Combining tree | CONF_OUT | UP_OUT | DONE_OUT | CID | Lit_Pos "
+                          "| Row named |")
             output.append("|---|---|---|---|---|---|---|")
             output.append("| chip | %s | %s | %s | %s | %s | %s |"
                           % (conflict, unit, done, clause_position, literal_position, named_row))

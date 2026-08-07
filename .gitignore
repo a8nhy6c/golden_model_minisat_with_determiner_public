@@ -75,5 +75,6 @@ examples/out_results.txt
 examples/out_checked.vec
 examples/out_determiner_results.txt
 examples/out_determiner.vec
+examples/out_template_results.txt
 *.dSYM/
 notes.md
