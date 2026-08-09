@@ -82,7 +82,7 @@ static const int DETERMINER_SETTLE_OFFSET = 2;
 static const int COMBINING_TREE_INPUT_COUNT = 4;
 static const int COMBINING_TREE_SETTLE_OFFSET = 4;
 static const int DECODER_ADDRESS_BIT_COUNT = 4;
-static const bool DECODER_ASSERTS_REVERSED_ONE_HOT = true;
+static const bool DECODER_ASSERTS_REVERSED_ONE_HOT = false;
 
 inline lbool valbits_to_lbool(int value_bits) {
     if (value_bits == VALBITS_FALSE) return Minisat::l_False;
